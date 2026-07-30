@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import random
+import subprocess
 import sys
 import time
 from urllib.parse import quote
@@ -253,6 +254,23 @@ def send_notification(plex, notify_cfg, run_label, captured):
         log(f"  notification email FAILED: {e}")
 
 
+def run_post_fix_hook(cfg):
+    hook = cfg.get("post_fix_hook")
+    if not hook:
+        return
+    log(f"  running post_fix_hook: {hook}")
+    try:
+        result = subprocess.run(hook, shell=True, capture_output=True, text=True, timeout=cfg.get("post_fix_hook_timeout", 600))
+        for line in (result.stdout or "").splitlines():
+            log(f"    [hook] {line}")
+        for line in (result.stderr or "").splitlines():
+            log(f"    [hook stderr] {line}")
+        if result.returncode != 0:
+            log(f"  post_fix_hook exited with status {result.returncode}")
+    except subprocess.TimeoutExpired:
+        log("  post_fix_hook timed out")
+
+
 def cmd_fix_rating_key(plex, cfg, rk):
     meta = plex.metadata(rk)
     title, year = meta.get("title"), meta.get("year")
@@ -265,6 +283,7 @@ def cmd_fix_rating_key(plex, cfg, rk):
         print("Fixed. Re-run your overlay tool so it re-stamps badges on the corrected poster.")
         if notify_cfg and capture:
             send_notification(plex, notify_cfg, "Plex Poster Fix (manual)", capture)
+        run_post_fix_hook(cfg)
     else:
         print("Could not fix — no real poster candidate found, or the API call failed.")
 
@@ -352,6 +371,7 @@ def main():
 
     notify_cfg = cfg.get("notify")
     capture = [] if notify_cfg else None
+    total_fixed = 0
 
     do_fix = args.fix
     if not args.yes and not args.fix and all_broken:
@@ -366,6 +386,7 @@ def main():
                 skipped += 1
         log(f"=== done. fixed={fixed} skipped={skipped} ===")
         log("Re-run your overlay tool now so it re-stamps badges on the corrected posters.")
+        total_fixed += fixed
 
     if args.sample:
         cmd_sample(plex, all_kometa, args.sample, os.path.join(BASE_DIR, "review"))
@@ -383,6 +404,7 @@ def main():
                 else:
                     skipped += 1
             log(f"=== overlay-touched pass done. fixed={fixed} skipped={skipped} ===")
+            total_fixed += fixed
     elif all_kometa and not args.yes:
         print(f"\n{len(all_kometa)} items already have an overlay-tool poster and can't be verified from "
               "metadata alone. Re-run with --sample 25 to spot-check a random sample, or --include-kometa "
@@ -390,6 +412,9 @@ def main():
 
     if notify_cfg and capture:
         send_notification(plex, notify_cfg, f"Plex Poster Fix ({time.strftime('%Y-%m-%d')})", capture)
+
+    if total_fixed > 0:
+        run_post_fix_hook(cfg)
 
 
 if __name__ == "__main__":

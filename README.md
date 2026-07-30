@@ -113,6 +113,23 @@ linking straight to that item in Plex Web on your server. No `notify` block
 Note: Resend requires the `from` address to be on a domain you've verified
 with them — it can still send to any recipient (Gmail, etc).
 
+## Chaining another script after a fix (e.g. push the new poster elsewhere)
+
+Set `post_fix_hook` in `config.json` to any shell command. It runs once,
+after a run that actually fixed at least one item (never on a run that found
+nothing to fix):
+
+```json
+"post_fix_hook": "python3 /path/to/some/other/script.py",
+"post_fix_hook_timeout": 600
+```
+
+Use this to trigger something like a Plex→Jellyfin/Emby poster-sync script
+right after this tool corrects a poster, so the fix propagates immediately
+instead of waiting for that other tool's own schedule. The hook's stdout/
+stderr are captured into `poster_fix.log`. No `post_fix_hook` = nothing runs,
+zero behavior change.
+
 ## How it works
 
 Plex exposes every poster candidate an agent found (TMDB, TVDB, IMDb,

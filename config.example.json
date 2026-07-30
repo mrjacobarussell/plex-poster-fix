@@ -6,5 +6,7 @@
     "resend_api_key": "re_your_resend_api_key",
     "from": "Plex Poster Fix <alerts@yourdomain.com>",
     "to": "you@example.com"
-  }
+  },
+  "post_fix_hook": "python3 /path/to/some/other/script.py",
+  "post_fix_hook_timeout": 600
 }
