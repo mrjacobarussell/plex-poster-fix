@@ -1,0 +1,5 @@
+{
+  "plex_url": "http://192.168.1.10:32400",
+  "plex_token": "your-plex-token",
+  "overlay_label": "Overlay"
+}
