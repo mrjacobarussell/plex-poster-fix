@@ -1,5 +1,11 @@
 {
   "plex_url": "http://192.168.1.10:32400",
   "plex_token": "your-plex-token",
-  "overlay_label": "Overlay"
+  "overlay_label": "Overlay",
+  "notify": {
+    "resend_api_key": "re_your_resend_api_key",
+    "from": "Plex Poster Fix <alerts@yourdomain.com>",
+    "to": "you@example.com",
+    "max_images": 20
+  }
 }

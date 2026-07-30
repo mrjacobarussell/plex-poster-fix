@@ -18,6 +18,7 @@ library, shows you counts, and asks before changing anything. It's also
 fully scriptable for cron via flags (see --help / README).
 """
 import argparse
+import base64
 import json
 import os
 import random
@@ -102,6 +103,12 @@ class Plex:
         with urlopen(url, timeout=30) as resp:
             return resp.read()
 
+    def poster_thumb_bytes(self, rating_key, width=160, height=240):
+        thumb = self.metadata(rating_key).get("thumb")
+        if not thumb:
+            return None
+        return self.transcoded_thumb(thumb, width, height)
+
 
 def load_config(path):
     if os.path.exists(path):
@@ -173,11 +180,19 @@ def scan(plex, section, item_type):
     return broken_local, kometa_upload
 
 
-def fix_one(plex, overlay_label, section_key, rk, title, year, candidates, tag=""):
+def fix_one(plex, overlay_label, section_key, rk, title, year, candidates, tag="", capture=None):
     real = best_real_candidate(candidates)
     if not real:
         log(f"  no real poster candidate for {title} ({year}), skipping")
         return False
+
+    before_bytes = None
+    if capture is not None:
+        try:
+            before_bytes = plex.poster_thumb_bytes(rk)
+        except (URLError, HTTPError):
+            before_bytes = None
+
     try:
         if not plex.select_poster(rk, real["ratingKey"]):
             log(f"  select call failed for {title} ({year})")
@@ -192,7 +207,77 @@ def fix_one(plex, overlay_label, section_key, rk, title, year, candidates, tag="
             log(f"    removed '{overlay_label}' label so the overlay tool reprocesses it")
     except (URLError, HTTPError) as e:
         log(f"    label check/remove failed for {title} ({year}): {e}")
+
+    if capture is not None:
+        try:
+            after_bytes = plex.poster_thumb_bytes(rk)
+        except (URLError, HTTPError):
+            after_bytes = None
+        capture.append({"rk": rk, "title": title, "year": year, "before": before_bytes, "after": after_bytes})
+
     return True
+
+
+def send_notification(notify_cfg, run_label, captured):
+    if not captured:
+        return
+    max_images = notify_cfg.get("max_images", 20)
+    shown = captured[:max_images]
+    extra = len(captured) - len(shown)
+
+    attachments, rows = [], []
+    for item in shown:
+        rk, title, year = item["rk"], item["title"], item["year"]
+
+        def img_tag(bytes_, cid, label):
+            if not bytes_:
+                return "(unavailable)"
+            attachments.append({
+                "filename": f"{cid}.jpg",
+                "content": base64.b64encode(bytes_).decode(),
+                "content_type": "image/jpeg",
+                "content_id": cid,
+            })
+            return (f'<img src="cid:{cid}" width="120" style="border-radius:4px;display:block;margin:0 auto 4px">'
+                    f'<div style="font-size:11px;color:#888;text-align:center">{label}</div>')
+
+        before_html = img_tag(item.get("before"), f"before-{rk}", "before")
+        after_html = img_tag(item.get("after"), f"after-{rk}", "after")
+        rows.append(
+            "<tr>"
+            f'<td style="padding:12px;font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:600">{title} ({year})</td>'
+            f'<td style="padding:12px;text-align:center">{before_html}</td>'
+            f'<td style="padding:12px;text-align:center">{after_html}</td>'
+            "</tr>"
+        )
+
+    extra_note = (f'<p style="font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#888">'
+                  f'+{extra} more — see poster_fix.log</p>') if extra > 0 else ""
+    html = (
+        '<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif">'
+        f"<h2>{run_label}: {len(captured)} poster{'s' if len(captured) != 1 else ''} fixed</h2>"
+        f'<table cellspacing="0" cellpadding="0">{"".join(rows)}</table>'
+        f"{extra_note}</div>"
+    )
+
+    payload = {
+        "from": notify_cfg.get("from", "Plex Poster Fix <onboarding@resend.dev>"),
+        "to": [notify_cfg["to"]],
+        "subject": f"{run_label}: {len(captured)} poster(s) corrected",
+        "html": html,
+        "attachments": attachments,
+    }
+    req = Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={"Authorization": f"Bearer {notify_cfg['resend_api_key']}", "Content-Type": "application/json"},
+    )
+    try:
+        with urlopen(req, timeout=60) as resp:
+            log(f"  notification email sent (HTTP {resp.status})")
+    except (URLError, HTTPError) as e:
+        log(f"  notification email FAILED: {e}")
 
 
 def cmd_fix_rating_key(plex, cfg, rk):
@@ -200,8 +285,13 @@ def cmd_fix_rating_key(plex, cfg, rk):
     title, year = meta.get("title"), meta.get("year")
     candidates = plex.poster_candidates(rk)
     section_key = meta.get("librarySectionID")
-    if fix_one(plex, cfg.get("overlay_label", DEFAULT_OVERLAY_LABEL), section_key, rk, title, year, candidates):
+    notify_cfg = cfg.get("notify")
+    capture = [] if notify_cfg else None
+    if fix_one(plex, cfg.get("overlay_label", DEFAULT_OVERLAY_LABEL), section_key, rk, title, year, candidates,
+               capture=capture):
         print("Fixed. Re-run your overlay tool so it re-stamps badges on the corrected poster.")
+        if notify_cfg and capture:
+            send_notification(notify_cfg, "Plex Poster Fix (manual)", capture)
     else:
         print("Could not fix — no real poster candidate found, or the API call failed.")
 
@@ -287,6 +377,9 @@ def main():
     for _, rk, title, year, _ in all_kometa:
         log(f"  [{rk}] {title} ({year})")
 
+    notify_cfg = cfg.get("notify")
+    capture = [] if notify_cfg else None
+
     do_fix = args.fix
     if not args.yes and not args.fix and all_broken:
         do_fix = input(f"\nFix {len(all_broken)} confirmed-broken items now? [y/N]: ").strip().lower() == "y"
@@ -294,7 +387,7 @@ def main():
     if do_fix:
         fixed = skipped = 0
         for section_key, rk, title, year, candidates in all_broken:
-            if fix_one(plex, overlay_label, section_key, rk, title, year, candidates):
+            if fix_one(plex, overlay_label, section_key, rk, title, year, candidates, capture=capture):
                 fixed += 1
             else:
                 skipped += 1
@@ -311,7 +404,8 @@ def main():
         if proceed:
             fixed = skipped = 0
             for section_key, rk, title, year, candidates in all_kometa:
-                if fix_one(plex, overlay_label, section_key, rk, title, year, candidates, tag=" (overlay-touched)"):
+                if fix_one(plex, overlay_label, section_key, rk, title, year, candidates, tag=" (overlay-touched)",
+                           capture=capture):
                     fixed += 1
                 else:
                     skipped += 1
@@ -320,6 +414,9 @@ def main():
         print(f"\n{len(all_kometa)} items already have an overlay-tool poster and can't be verified from "
               "metadata alone. Re-run with --sample 25 to spot-check a random sample, or --include-kometa "
               "to force-reset all of them (not recommended unless you've confirmed a real problem).")
+
+    if notify_cfg and capture:
+        send_notification(notify_cfg, f"Plex Poster Fix ({time.strftime('%Y-%m-%d')})", capture)
 
 
 if __name__ == "__main__":

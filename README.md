@@ -88,7 +88,32 @@ On Unraid: *Settings → User Scripts* → new script:
 python3 /path/to/plex-poster-fix/plex_poster_fix.py --yes --fix
 ```
 
-Schedule it to run maybe 30–60 minutes before your Kometa schedule.
+Schedule it (e.g. daily, `0 3 * * *`), ideally 30–60 minutes before your
+Kometa schedule.
+
+## Email notifications (before/after photos)
+
+Add a `notify` block to `config.json` (see `config.example.json`) with a
+[Resend](https://resend.com) API key, a verified `from` address, and the
+`to` address you want alerted:
+
+```json
+"notify": {
+  "resend_api_key": "re_...",
+  "from": "Plex Poster Fix <alerts@yourdomain.com>",
+  "to": "you@example.com",
+  "max_images": 20
+}
+```
+
+Whenever a run fixes at least one poster (`--fix`, `--include-kometa`, or
+`--rating-key`), it emails a before/after thumbnail for each item fixed in
+that run (capped at `max_images` to keep the email a sane size — the rest
+are still listed in `poster_fix.log`). No `notify` block = no emails, zero
+behavior change.
+
+Note: Resend requires the `from` address to be on a domain you've verified
+with them — it can still send to any recipient (Gmail, etc).
 
 ## How it works
 
