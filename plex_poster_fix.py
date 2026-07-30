@@ -74,11 +74,17 @@ class Plex:
         data = self.get_json(f"/library/metadata/{rating_key}/posters")
         return data["MediaContainer"].get("Metadata", [])
 
-    def select_poster(self, rating_key, candidate_key):
+    def select_poster(self, rating_key, candidate_key, retries=2):
         url = f"{self.url}/library/metadata/{rating_key}/posters?url={quote(candidate_key, safe='')}&X-Plex-Token={self.token}"
-        req = Request(url, method="POST")
-        with urlopen(req, timeout=30) as resp:
-            return resp.status in (200, 204)
+        for attempt in range(retries + 1):
+            try:
+                req = Request(url, method="POST")
+                with urlopen(req, timeout=30) as resp:
+                    return resp.status in (200, 204)
+            except (URLError, HTTPError):
+                if attempt == retries:
+                    raise
+                time.sleep(1)
 
     def labels(self, rating_key):
         return [l["tag"] for l in self.metadata(rating_key).get("Label", [])]
@@ -172,8 +178,12 @@ def fix_one(plex, overlay_label, section_key, rk, title, year, candidates, tag="
     if not real:
         log(f"  no real poster candidate for {title} ({year}), skipping")
         return False
-    if not plex.select_poster(rk, real["ratingKey"]):
-        log(f"  select call failed for {title} ({year})")
+    try:
+        if not plex.select_poster(rk, real["ratingKey"]):
+            log(f"  select call failed for {title} ({year})")
+            return False
+    except (URLError, HTTPError) as e:
+        log(f"  select call failed for {title} ({year}): {e}")
         return False
     log(f"  fixed{tag}: {title} ({year}) -> provider={real['provider']}")
     try:
