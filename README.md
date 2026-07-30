@@ -91,7 +91,7 @@ python3 /path/to/plex-poster-fix/plex_poster_fix.py --yes --fix
 Schedule it (e.g. daily, `0 3 * * *`), ideally 30–60 minutes before your
 Kometa schedule.
 
-## Email notifications (before/after photos)
+## Email notifications
 
 Add a `notify` block to `config.json` (see `config.example.json`) with a
 [Resend](https://resend.com) API key, a verified `from` address, and the
@@ -101,16 +101,14 @@ Add a `notify` block to `config.json` (see `config.example.json`) with a
 "notify": {
   "resend_api_key": "re_...",
   "from": "Plex Poster Fix <alerts@yourdomain.com>",
-  "to": "you@example.com",
-  "max_images": 20
+  "to": "you@example.com"
 }
 ```
 
 Whenever a run fixes at least one poster (`--fix`, `--include-kometa`, or
-`--rating-key`), it emails a before/after thumbnail for each item fixed in
-that run (capped at `max_images` to keep the email a sane size — the rest
-are still listed in `poster_fix.log`). No `notify` block = no emails, zero
-behavior change.
+`--rating-key`), it emails a plain list of every title fixed, each one
+linking straight to that item in Plex Web on your server. No `notify` block
+= no emails, zero behavior change.
 
 Note: Resend requires the `from` address to be on a domain you've verified
 with them — it can still send to any recipient (Gmail, etc).

@@ -5,7 +5,6 @@
   "notify": {
     "resend_api_key": "re_your_resend_api_key",
     "from": "Plex Poster Fix <alerts@yourdomain.com>",
-    "to": "you@example.com",
-    "max_images": 20
+    "to": "you@example.com"
   }
 }

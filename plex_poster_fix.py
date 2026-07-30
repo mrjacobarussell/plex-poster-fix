@@ -18,7 +18,6 @@ library, shows you counts, and asks before changing anything. It's also
 fully scriptable for cron via flags (see --help / README).
 """
 import argparse
-import base64
 import json
 import os
 import random
@@ -103,11 +102,11 @@ class Plex:
         with urlopen(url, timeout=30) as resp:
             return resp.read()
 
-    def poster_thumb_bytes(self, rating_key, width=160, height=240):
-        thumb = self.metadata(rating_key).get("thumb")
-        if not thumb:
-            return None
-        return self.transcoded_thumb(thumb, width, height)
+    def machine_identifier(self):
+        return self.get_json("/identity")["MediaContainer"]["machineIdentifier"]
+
+    def web_link(self, machine_id, rating_key):
+        return f"{self.url}/web/index.html#!/server/{machine_id}/details?key=%2Flibrary%2Fmetadata%2F{rating_key}"
 
 
 def load_config(path):
@@ -186,13 +185,6 @@ def fix_one(plex, overlay_label, section_key, rk, title, year, candidates, tag="
         log(f"  no real poster candidate for {title} ({year}), skipping")
         return False
 
-    before_bytes = None
-    if capture is not None:
-        try:
-            before_bytes = plex.poster_thumb_bytes(rk)
-        except (URLError, HTTPError):
-            before_bytes = None
-
     try:
         if not plex.select_poster(rk, real["ratingKey"]):
             log(f"  select call failed for {title} ({year})")
@@ -209,55 +201,31 @@ def fix_one(plex, overlay_label, section_key, rk, title, year, candidates, tag="
         log(f"    label check/remove failed for {title} ({year}): {e}")
 
     if capture is not None:
-        try:
-            after_bytes = plex.poster_thumb_bytes(rk)
-        except (URLError, HTTPError):
-            after_bytes = None
-        capture.append({"rk": rk, "title": title, "year": year, "before": before_bytes, "after": after_bytes})
+        capture.append({"rk": rk, "title": title, "year": year})
 
     return True
 
 
-def send_notification(notify_cfg, run_label, captured):
+def send_notification(plex, notify_cfg, run_label, captured):
     if not captured:
         return
-    max_images = notify_cfg.get("max_images", 20)
-    shown = captured[:max_images]
-    extra = len(captured) - len(shown)
+    try:
+        machine_id = plex.machine_identifier()
+    except (URLError, HTTPError) as e:
+        log(f"  notification email FAILED: could not fetch machine identifier: {e}")
+        return
 
-    attachments, rows = [], []
-    for item in shown:
-        rk, title, year = item["rk"], item["title"], item["year"]
-
-        def img_tag(bytes_, cid, label):
-            if not bytes_:
-                return "(unavailable)"
-            attachments.append({
-                "filename": f"{cid}.jpg",
-                "content": base64.b64encode(bytes_).decode(),
-                "content_type": "image/jpeg",
-                "content_id": cid,
-            })
-            return (f'<img src="cid:{cid}" width="120" style="border-radius:4px;display:block;margin:0 auto 4px">'
-                    f'<div style="font-size:11px;color:#888;text-align:center">{label}</div>')
-
-        before_html = img_tag(item.get("before"), f"before-{rk}", "before")
-        after_html = img_tag(item.get("after"), f"after-{rk}", "after")
+    rows = []
+    for item in captured:
+        link = plex.web_link(machine_id, item["rk"])
         rows.append(
-            "<tr>"
-            f'<td style="padding:12px;font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:600">{title} ({year})</td>'
-            f'<td style="padding:12px;text-align:center">{before_html}</td>'
-            f'<td style="padding:12px;text-align:center">{after_html}</td>'
-            "</tr>"
+            f'<li><a href="{link}">{item["title"]} ({item["year"]})</a></li>'
         )
-
-    extra_note = (f'<p style="font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#888">'
-                  f'+{extra} more — see poster_fix.log</p>') if extra > 0 else ""
     html = (
         '<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif">'
         f"<h2>{run_label}: {len(captured)} poster{'s' if len(captured) != 1 else ''} fixed</h2>"
-        f'<table cellspacing="0" cellpadding="0">{"".join(rows)}</table>'
-        f"{extra_note}</div>"
+        f'<ul>{"".join(rows)}</ul>'
+        "</div>"
     )
 
     payload = {
@@ -265,14 +233,13 @@ def send_notification(notify_cfg, run_label, captured):
         "to": [notify_cfg["to"]],
         "subject": f"{run_label}: {len(captured)} poster(s) corrected",
         "html": html,
-        "attachments": attachments,
     }
     req = Request(
         "https://api.resend.com/emails",
         data=json.dumps(payload).encode(),
         method="POST",
         # Resend sits behind Cloudflare, which blocks the default urllib
-        # User-Agent on POSTs with attachment payloads (Cloudflare error 1010).
+        # User-Agent on some POSTs (Cloudflare error 1010).
         headers={
             "Authorization": f"Bearer {notify_cfg['resend_api_key']}",
             "Content-Type": "application/json",
@@ -297,7 +264,7 @@ def cmd_fix_rating_key(plex, cfg, rk):
                capture=capture):
         print("Fixed. Re-run your overlay tool so it re-stamps badges on the corrected poster.")
         if notify_cfg and capture:
-            send_notification(notify_cfg, "Plex Poster Fix (manual)", capture)
+            send_notification(plex, notify_cfg, "Plex Poster Fix (manual)", capture)
     else:
         print("Could not fix — no real poster candidate found, or the API call failed.")
 
@@ -422,7 +389,7 @@ def main():
               "to force-reset all of them (not recommended unless you've confirmed a real problem).")
 
     if notify_cfg and capture:
-        send_notification(notify_cfg, f"Plex Poster Fix ({time.strftime('%Y-%m-%d')})", capture)
+        send_notification(plex, notify_cfg, f"Plex Poster Fix ({time.strftime('%Y-%m-%d')})", capture)
 
 
 if __name__ == "__main__":
