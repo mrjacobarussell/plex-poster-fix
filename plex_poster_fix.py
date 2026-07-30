@@ -271,7 +271,13 @@ def send_notification(notify_cfg, run_label, captured):
         "https://api.resend.com/emails",
         data=json.dumps(payload).encode(),
         method="POST",
-        headers={"Authorization": f"Bearer {notify_cfg['resend_api_key']}", "Content-Type": "application/json"},
+        # Resend sits behind Cloudflare, which blocks the default urllib
+        # User-Agent on POSTs with attachment payloads (Cloudflare error 1010).
+        headers={
+            "Authorization": f"Bearer {notify_cfg['resend_api_key']}",
+            "Content-Type": "application/json",
+            "User-Agent": "plex-poster-fix/1.0",
+        },
     )
     try:
         with urlopen(req, timeout=60) as resp:
