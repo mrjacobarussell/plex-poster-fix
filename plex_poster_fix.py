@@ -152,8 +152,13 @@ def classify(candidates):
 
 
 def best_real_candidate(candidates):
+    # Plex sometimes lists an internal reference (e.g.
+    # "metadata://posters/tv.plex.agents.movie_<guid>") as the top-ranked
+    # candidate for an item that's already been reselected once before. That
+    # format is deterministically rejected (406) by the same posters endpoint
+    # that returned it — only a plain http(s) URL is safe to feed back in.
     for c in candidates:
-        if c.get("provider") in GOOD_PROVIDERS:
+        if c.get("provider") in GOOD_PROVIDERS and c.get("ratingKey", "").startswith(("http://", "https://")):
             return c
     return None
 
